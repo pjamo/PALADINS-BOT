@@ -7,7 +7,9 @@ import imagehash
 import pytesseract
 import re
 
-IMG_PATH = "1273658961.png"
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+IMG_PATH = "1273613226.png"
 HASH_JSON = "champion_hashes.json"
 OUTPUT_JSON = "parsed_scoreboard2.json"
 
@@ -128,15 +130,36 @@ def levenshtein_distance(s1, s2):
 
 
 def ocr_text(img, box, whitelist, unmatched_players):
-    """Perform OCR and match the result with the whitelist."""
     roi = extract_region(img, box)
-    text = pytesseract.image_to_string(roi, config="--psm 7").strip()
-    # Allow Unicode letters, numbers, spaces, and common symbols
-    text = re.sub(
-        r"[^\w\s!@#$%^&*()\-_=+{}\[\]:;\"'<>,.?/|\\~`À-ÿ]", "□", text
+    
+    # Convert to grayscale
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    
+    # Apply Gaussian blur to reduce noise
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    
+    # Use adaptive thresholding
+    thr = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
     )
-
-    # Attempt to match the OCR result with the whitelist
+    
+    # Morphological operations to clean up
+    kernel = np.ones((2, 2), np.uint8)
+    thr = cv2.dilate(thr, kernel, iterations=1)
+    
+    # OCR with updated config, including special characters
+    text = pytesseract.image_to_string(
+        thr, 
+        config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789öéàáèíòóùúÄÖÜäöüÉ",
+        lang="eng"
+    ).strip()
+    
+    # Clean text, preserving special characters
+    text = re.sub(r"[^\w\söéàáèíòóùúÄÖÜäöüÉ]", "", text)
+    
+    print(f"OCR raw before matching: '{text}'")
+    
+    # Match with whitelist
     closest_match = None
     min_distance = float("inf")
     for name in whitelist:
@@ -144,13 +167,13 @@ def ocr_text(img, box, whitelist, unmatched_players):
         if distance < min_distance:
             closest_match = name
             min_distance = distance
-
-    # Always use the closest match from the whitelist
-    if closest_match:
+    
+    # Threshold for acceptable matches
+    if closest_match and min_distance <= 3:
         whitelist.remove(closest_match)
         return closest_match
     else:
-        unmatched_players.append(text)  # Add unmatched OCR text to the list
+        unmatched_players.append(text)
         print(f"⚠ Error: '{text}' not found in whitelist. Using raw value.")
         return text
 
@@ -187,26 +210,22 @@ def parse_kda(kda_str: str):
 
 def parse_match_data(img):
     match_data = {}
-    map_whitelist_file = "maps.json"  # Path to the maps.json file
+    map_whitelist_file = "maps.json"
     map_whitelist = load_map_whitelist(map_whitelist_file)
 
     for key, (x1, y1, x2, y2) in MATCH_BOXES.items():
         box = (x1 + MATCH_X_SHIFT, y1 + MATCH_Y_SHIFT,
                x2 + MATCH_X_SHIFT, y2 + MATCH_Y_SHIFT)
-        # Perform OCR without using the whitelist for match data
         text = pytesseract.image_to_string(
             extract_region(img, box), config="--psm 7").strip()
 
         if key == "duration":
-            # Extract numeric value from "12 minutes" or similar text
             match = re.search(r"(\d+)", text)
             match_data["time_minutes"] = int(match.group(1)) if match else 0
         elif key in ("team1_score", "team2_score"):
-            # Extract the last integer from the text to get match score
             match = re.search(r"(\d+)$", text)
             match_data[key] = int(match.group(1)) if match else 0
         elif key == "map":
-            # Match the OCR result with the map whitelist
             match_data[key] = match_map_name(text, map_whitelist)
         else:
             match_data[key] = text
@@ -235,7 +254,7 @@ def main():
     # Extract player stats
     team1, team2 = [], []
     all_rows = NUM_ROWS * 2
-    unmatched_players = []  # Track unmatched OCR results
+    unmatched_players = []
     for i in range(all_rows):
         team = team1 if i < NUM_ROWS else team2
         if i < NUM_ROWS:
@@ -249,22 +268,18 @@ def main():
             box = (x1 + X_SHIFT, y_offset + y1 + Y_SHIFT,
                    x2 + X_SHIFT, y_offset + y2 + Y_SHIFT)
             if key == "player":
-                # Use the whitelist for player names
                 val = ocr_text(img, box, whitelist, unmatched_players)
                 pdata["player"] = val
             elif key == "credits":
-                # Parse numerical values for credits
                 val = pytesseract.image_to_string(
                     extract_region(img, box), config="--psm 7").strip()
                 pdata["credits"] = to_int(val)
             elif key == "KDA":
-                # Parse KDA values
                 val = pytesseract.image_to_string(
                     extract_region(img, box), config="--psm 7").strip()
                 k, d, a = parse_kda(val)
                 pdata["kills"], pdata["deaths"], pdata["assists"] = k, d, a
             else:
-                # Parse other numerical fields
                 val = pytesseract.image_to_string(
                     extract_region(img, box), config="--psm 7").strip()
                 pdata[key] = to_int(val)
@@ -309,18 +324,14 @@ def add_match_id_to_json(file_path):
     The match_id is derived from the file name.
     """
     try:
-        # Extract the match_id from the file name (remove extension and non-numeric characters)
         file_name = os.path.basename(file_path)
         match_id = int(''.join(filter(str.isdigit, file_name)))
 
-        # Load the JSON file
         with open(file_path, 'r', encoding='utf-8') as file:
             data = json.load(file)
 
-        # Add the match_id to the 'match' object
         data['match']['match_id'] = match_id
 
-        # Save the updated JSON back to the file
         with open(file_path, 'w', encoding='utf-8') as file:
             json.dump(data, file, indent=2, ensure_ascii=False)
 
@@ -337,6 +348,5 @@ def add_match_id_to_json(file_path):
         print(f"An error occurred: {e}")
 
 
-# Example usage
 if __name__ == "__main__":
     main()
