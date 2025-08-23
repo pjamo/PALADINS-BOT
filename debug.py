@@ -1,11 +1,10 @@
 import cv2
-import json
 
 # -------------------------------
 # Config
 # -------------------------------
-IMG_PATH = "TeamMatch.png"
-JSON_PATH = "match_data.json"
+IMG_PATH = "1273609932.png"
+# JSON_PATH = "match_data.json"  # Removed as it's unused
 
 # Player stat boxes (x1, y1, x2, y2) relative to row start
 ADJUSTED_BOXES = {
@@ -51,12 +50,7 @@ OUT_PATH = "debug_all_boxes.png"
 # -------------------------------
 # Draw boxes for debugging
 # -------------------------------
-
-
 def draw_boxes():
-    with open(JSON_PATH, "r", encoding="utf-8") as f:
-        truth = json.load(f)
-
     img = cv2.imread(IMG_PATH)
 
     # Colors for clarity per column
@@ -122,7 +116,6 @@ def draw_boxes():
     cv2.imwrite(OUT_PATH, img)
     print(
         f"Debug image with Team 1, Team 2, and Match data boxes saved to {OUT_PATH}")
-
 
 if __name__ == "__main__":
     draw_boxes()
