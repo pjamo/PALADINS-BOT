@@ -1,0 +1,8 @@
+*.json
+*.db
+*.png
+*.zip
+
+.env
+
+!champion_hashes.json
