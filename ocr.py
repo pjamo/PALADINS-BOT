@@ -7,6 +7,7 @@ import imagehash
 import pytesseract
 import re
 import sys
+import json
 from typing import Dict, List
 
 # -------------------------------
@@ -15,6 +16,7 @@ from typing import Dict, List
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 IMG_PATH = sys.argv[1]  # Image path passed as the only argument
+HASH_JSON = "champion_hashes.json"  # Path to champion hashes JSON file
 
 ICON_W, ICON_H = 228, 101
 
@@ -47,12 +49,25 @@ MATCH_Y_SHIFT = 32
 
 
 def load_hashes(path: str) -> Dict[str, imagehash.ImageHash]:
+    """
+    Load champion hashes from a JSON file and strip the '_Icon' suffix from champion names.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Champion hashes file not found: {path}")
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return {k: imagehash.hex_to_hash(v) for k, v in data.items() if isinstance(v, str)}
+    # Strip '_Icon' and 'Champion_' and map "Pepper" to "Pip"
+    return {
+        (k.replace("_Icon", "").replace("Champion_", "") if k != "Champion_Pepper_Icon" else "Pip"): imagehash.hex_to_hash(v)
+        for k, v in data.items()
+        if isinstance(v, str)
+    }
 
 
 def phash(img_bgr: np.ndarray) -> imagehash.ImageHash:
+    """
+    Compute the perceptual hash of an image.
+    """
     rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     pil = Image.fromarray(rgb)
     return imagehash.phash(pil)
@@ -61,6 +76,9 @@ def phash(img_bgr: np.ndarray) -> imagehash.ImageHash:
 def match_champion(icon_bgr: np.ndarray,
                    hash_book: Dict[str, imagehash.ImageHash],
                    max_dist: int = 20) -> str:
+    """
+    Match a champion icon to the closest hash in the hash book.
+    """
     h = phash(icon_bgr)
     best_k, best_d = None, 9999
     for k, hv in hash_book.items():
@@ -71,7 +89,9 @@ def match_champion(icon_bgr: np.ndarray,
 
 
 def detect_champion_boxes(img_bgr: np.ndarray):
-    """Try to detect champ portraits; if not enough found, fall back to row-based tops."""
+    """
+    Try to detect champion portraits; if not enough found, fall back to row-based tops.
+    """
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     _, thr = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
     cnts, _ = cv2.findContours(thr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -169,6 +189,9 @@ def parse_match_data(img, players: List[str]):
 
 
 def main():
+    """
+    Main function to process the image and extract match data.
+    """
     if len(sys.argv) < 2:
         print("Usage: python ocr.py <image_path>")
         sys.exit(1)
@@ -176,6 +199,9 @@ def main():
     img = cv2.imread(IMG_PATH)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {IMG_PATH}")
+
+    # Load champion hashes
+    hash_book = load_hashes(HASH_JSON)
 
     # Players will be passed via stdin (from run.py)
     players = sys.stdin.read().strip().split("\n")
